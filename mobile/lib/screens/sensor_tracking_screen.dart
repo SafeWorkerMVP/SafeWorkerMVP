@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -24,6 +25,7 @@ class SensorTrackingScreen extends StatefulWidget {
 class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
   final _sensorService = SensorService();
   final _battery = Battery();
+
   StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroscopeSubscription;
   Timer? _autoSendTimer;
@@ -34,11 +36,22 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
   double _gyroX = 0.1;
   double _gyroY = 0.2;
   double _gyroZ = 0.3;
+
+  double _lastMovementMagnitude = 0;
+  DateTime _lastMovementAt = DateTime.now();
+
   int _batteryLevel = 80;
   String _networkStatus = 'online';
   String _lastMessage = 'Henüz veri gönderilmedi.';
   bool _isSending = false;
   bool _sensorWarningShown = false;
+
+  bool get _isInactive {
+    final secondsWithoutMovement =
+        DateTime.now().difference(_lastMovementAt).inSeconds;
+
+    return secondsWithoutMovement >= 30;
+  }
 
   @override
   void initState() {
@@ -55,10 +68,28 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
     super.dispose();
   }
 
+  double _calculateMagnitude(double x, double y, double z) {
+    return sqrt(x * x + y * y + z * z);
+  }
+
+  void _updateMovementStatus(double x, double y, double z) {
+    final currentMagnitude = _calculateMagnitude(x, y, z);
+    final difference = (currentMagnitude - _lastMovementMagnitude).abs();
+
+    if (difference > 0.35) {
+      _lastMovementAt = DateTime.now();
+    }
+
+    _lastMovementMagnitude = currentMagnitude;
+  }
+
   void _startSensorStreams() {
     try {
       _accelerometerSubscription = accelerometerEventStream().listen((event) {
         if (!mounted) return;
+
+        _updateMovementStatus(event.x, event.y, event.z);
+
         setState(() {
           _accX = event.x;
           _accY = event.y;
@@ -68,6 +99,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
 
       _gyroscopeSubscription = gyroscopeEventStream().listen((event) {
         if (!mounted) return;
+
         setState(() {
           _gyroX = event.x;
           _gyroY = event.y;
@@ -81,6 +113,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
 
   void _setSensorWarning() {
     if (_sensorWarningShown || !mounted) return;
+
     setState(() {
       _sensorWarningShown = true;
       _lastMessage =
@@ -95,12 +128,14 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
       final isOffline = connectivity.contains(ConnectivityResult.none);
 
       if (!mounted) return;
+
       setState(() {
         _batteryLevel = batteryLevel;
         _networkStatus = isOffline ? 'offline' : 'online';
       });
     } catch (_) {
       if (!mounted) return;
+
       setState(() {
         _batteryLevel = 80;
         _networkStatus = 'online';
@@ -134,7 +169,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
       gyroscope: SensorVector(x: _gyroX, y: _gyroY, z: _gyroZ),
       batteryLevel: _batteryLevel,
       networkStatus: _networkStatus,
-      inactivity: false,
+      inactivity: _isInactive,
     );
   }
 
@@ -151,8 +186,10 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
       final sensorData =
           (response.data as Map<String, dynamic>)['sensorData']
               as Map<String, dynamic>?;
+
       final riskLevel = sensorData?['riskLevel']?.toString() ?? '-';
       final riskScore = sensorData?['riskScore']?.toString() ?? '-';
+
       _showMessage('Veri gönderildi. Risk: $riskLevel / $riskScore');
     } on ApiException catch (error) {
       _showMessage(error.message);
@@ -167,9 +204,11 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
 
   void _startAutoSend() {
     _autoSendTimer?.cancel();
+
     _autoSendTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _sendSensorData(silent: true);
     });
+
     _showMessage(
       'Otomatik gönderim başlatıldı. Her 5 saniyede bir veri gönderilecek.',
     );
@@ -183,7 +222,9 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
 
   void _showMessage(String message) {
     if (!mounted) return;
+
     setState(() => _lastMessage = '${SafeDateUtils.timeNowText()} - $message');
+
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
@@ -192,6 +233,8 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
   @override
   Widget build(BuildContext context) {
     final isAutoSending = _autoSendTimer?.isActive == true;
+    final secondsWithoutMovement =
+        DateTime.now().difference(_lastMovementAt).inSeconds;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sensör Takibi')),
@@ -223,6 +266,51 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
                 ),
               ],
             ),
+            Row(
+              children: [
+                Expanded(
+                  child: StatusCard(
+                    title: 'Hareket',
+                    value: _isInactive ? 'Hareketsiz' : 'Aktif',
+                    icon: _isInactive
+                        ? Icons.personal_injury
+                        : Icons.directions_walk,
+                    color: _isInactive
+                        ? const Color(0xFFDC2626)
+                        : const Color(0xFF15803D),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: StatusCard(
+                    title: 'Son hareket',
+                    value: '$secondsWithoutMovement sn',
+                    icon: Icons.timer,
+                    color: secondsWithoutMovement >= 30
+                        ? const Color(0xFFDC2626)
+                        : const Color(0xFF0F766E),
+                  ),
+                ),
+              ],
+            ),
+            if (isAutoSending)
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.sync, color: Color(0xFF15803D)),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Canlı veri gönderimi aktif. Cihaz her 5 saniyede bir backend sistemine sensör verisi gönderiyor.',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),

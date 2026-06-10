@@ -7,14 +7,15 @@ const { asyncHandler, createError } = require('../middlewares/error.middleware')
 
 const isObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-const getAlarms = asyncHandler(async (req, res) => {
-  const { status, type } = req.query;
+const buildAlarmFilter = (query) => {
+  const { status, type, minRisk } = query;
   const filter = {};
 
   if (status) {
     if (!['active', 'resolved'].includes(status)) {
       throw createError(400, 'status must be active or resolved');
     }
+
     filter.status = status;
   }
 
@@ -22,8 +23,33 @@ const getAlarms = asyncHandler(async (req, res) => {
     if (!ALARM_TYPE_VALUES.includes(type)) {
       throw createError(400, 'invalid alarm type');
     }
+
     filter.type = type;
   }
+
+  if (minRisk !== undefined) {
+    const parsedRisk = Number(minRisk);
+
+    if (Number.isNaN(parsedRisk) || parsedRisk < 0 || parsedRisk > 100) {
+      throw createError(400, 'minRisk must be a number between 0 and 100');
+    }
+
+    filter.riskScore = { $gte: parsedRisk };
+  }
+
+  return filter;
+};
+
+const escapeCsv = (value) => {
+  if (value === undefined || value === null) return '';
+
+  const stringValue = String(value).replace(/"/g, '""');
+
+  return /[",\n]/.test(stringValue) ? `"${stringValue}"` : stringValue;
+};
+
+const getAlarms = asyncHandler(async (req, res) => {
+  const filter = buildAlarmFilter(req.query);
 
   const alarms = await populateAlarm(Alarm.find(filter)).sort({ createdAt: -1 });
 
@@ -35,13 +61,42 @@ const getAlarms = asyncHandler(async (req, res) => {
 });
 
 const getActiveAlarms = asyncHandler(async (req, res) => {
-  const alarms = await populateAlarm(Alarm.find({ status: 'active' })).sort({ createdAt: -1 });
+  const alarms = await populateAlarm(Alarm.find({ status: 'active' })).sort({
+    createdAt: -1
+  });
 
   res.json({
     success: true,
     message: 'Active alarms fetched successfully',
     data: alarms
   });
+});
+
+const exportAlarmsCsv = asyncHandler(async (req, res) => {
+  const filter = buildAlarmFilter(req.query);
+
+  const alarms = await populateAlarm(Alarm.find(filter))
+    .sort({ createdAt: -1 })
+    .limit(1000);
+
+  const rows = [
+    ['type', 'worker', 'device', 'message', 'riskScore', 'status', 'createdAt'],
+    ...alarms.map((alarm) => [
+      alarm.type,
+      alarm.workerId?.name || '',
+      alarm.deviceId?.deviceName || '',
+      alarm.message,
+      alarm.riskScore,
+      alarm.status,
+      alarm.createdAt ? alarm.createdAt.toISOString() : ''
+    ])
+  ];
+
+  const csv = rows.map((row) => row.map(escapeCsv).join(',')).join('\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="safeworker-alarms.csv"');
+  res.send(`\uFEFF${csv}`);
 });
 
 const resolveAlarm = asyncHandler(async (req, res) => {
@@ -75,5 +130,6 @@ const resolveAlarm = asyncHandler(async (req, res) => {
 module.exports = {
   getAlarms,
   getActiveAlarms,
+  exportAlarmsCsv,
   resolveAlarm
 };

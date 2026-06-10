@@ -47,7 +47,18 @@ const sensorDataSchema = new mongoose.Schema(
     riskLevel: {
       type: String,
       enum: ['normal', 'warning', 'danger']
-    }
+    },
+    inactivity: {
+      type: Boolean,
+      default: false
+    },
+    riskFactors: [
+      {
+        name: { type: String },
+        score: { type: Number },
+        description: { type: String }
+      }
+    ]
   },
   {
     timestamps: true,

@@ -9,6 +9,7 @@ const { emitEvent } = require('../services/socket.service');
 const { asyncHandler, createError } = require('../middlewares/error.middleware');
 
 const isObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
 const SENSOR_REQUIRED_NUMBERS = [
   'accelerometer.x',
   'accelerometer.y',
@@ -24,9 +25,11 @@ const getNestedValue = (object, path) => {
 
 const requireNumber = (body, path) => {
   const value = getNestedValue(body, path);
+
   if (value === undefined || value === null) {
     throw createError(400, `${path} is required`);
   }
+
   if (typeof value !== 'number' || Number.isNaN(value)) {
     throw createError(400, `${path} must be a number`);
   }
@@ -41,11 +44,19 @@ const ensureWorkerScope = (req, workerId) => {
 const validateSensorBody = (body) => {
   if (!body.workerId) throw createError(400, 'workerId is required');
   if (!isObjectId(body.workerId)) throw createError(400, 'workerId is invalid');
+
   if (!body.deviceId) throw createError(400, 'deviceId is required');
   if (!isObjectId(body.deviceId)) throw createError(400, 'deviceId is invalid');
-  if (body.shiftId && !isObjectId(body.shiftId)) throw createError(400, 'shiftId is invalid');
+
+  if (body.shiftId && !isObjectId(body.shiftId)) {
+    throw createError(400, 'shiftId is invalid');
+  }
+
   if (!body.timestamp) throw createError(400, 'timestamp is required');
-  if (Number.isNaN(Date.parse(body.timestamp))) throw createError(400, 'timestamp is invalid');
+  if (Number.isNaN(Date.parse(body.timestamp))) {
+    throw createError(400, 'timestamp is invalid');
+  }
+
   if (!body.accelerometer) throw createError(400, 'accelerometer is required');
   if (!body.gyroscope) throw createError(400, 'gyroscope is required');
 
@@ -54,17 +65,20 @@ const validateSensorBody = (body) => {
   if (body.batteryLevel === undefined || body.batteryLevel === null) {
     throw createError(400, 'batteryLevel is required');
   }
+
   if (typeof body.batteryLevel !== 'number' || Number.isNaN(body.batteryLevel)) {
     throw createError(400, 'batteryLevel must be a number');
   }
+
   if (!body.networkStatus) throw createError(400, 'networkStatus is required');
+
   if (!['online', 'offline'].includes(body.networkStatus)) {
     throw createError(400, 'networkStatus must be online or offline');
   }
-};
 
-const getAlarmCandidatesForPersist = (riskResult) => {
-  return riskResult.alarmCandidates;
+  if (body.inactivity !== undefined && typeof body.inactivity !== 'boolean') {
+    throw createError(400, 'inactivity must be a boolean');
+  }
 };
 
 const createSensorData = asyncHandler(async (req, res) => {
@@ -85,14 +99,18 @@ const createSensorData = asyncHandler(async (req, res) => {
   ensureWorkerScope(req, workerId);
 
   const device = await Device.findById(deviceId);
+
   if (!device) throw createError(404, 'device not found');
+
   if (device.workerId.toString() !== workerId.toString()) {
     throw createError(400, 'device does not belong to worker');
   }
 
   if (shiftId) {
     const shift = await Shift.findById(shiftId);
+
     if (!shift) throw createError(404, 'shift not found');
+
     if (shift.workerId.toString() !== workerId.toString()) {
       throw createError(400, 'shift does not belong to worker');
     }
@@ -121,8 +139,10 @@ const createSensorData = asyncHandler(async (req, res) => {
     },
     batteryLevel,
     networkStatus,
+    inactivity: inactivity === true,
     riskScore: riskResult.riskScore,
-    riskLevel: riskResult.riskLevel
+    riskLevel: riskResult.riskLevel,
+    riskFactors: riskResult.riskFactors
   });
 
   await Device.findByIdAndUpdate(deviceId, {
@@ -134,9 +154,8 @@ const createSensorData = asyncHandler(async (req, res) => {
   emitEvent('sensor:new', sensorData);
 
   const createdAlarms = [];
-  const candidates = getAlarmCandidatesForPersist(riskResult);
 
-  for (const candidate of candidates) {
+  for (const candidate of riskResult.alarmCandidates) {
     const alarm = await createAlarm({
       workerId,
       deviceId,
@@ -145,6 +164,7 @@ const createSensorData = asyncHandler(async (req, res) => {
       message: candidate.message,
       riskScore: candidate.riskScore
     });
+
     createdAlarms.push(alarm);
   }
 
@@ -163,6 +183,7 @@ const getSensorDataByWorker = asyncHandler(async (req, res) => {
   const { workerId } = req.params;
 
   if (!isObjectId(workerId)) throw createError(400, 'workerId is invalid');
+
   ensureWorkerScope(req, workerId);
 
   const sensorData = await SensorData.find({ workerId })
@@ -182,6 +203,7 @@ const getLatestSensorData = asyncHandler(async (req, res) => {
   const { workerId } = req.params;
 
   if (!isObjectId(workerId)) throw createError(400, 'workerId is invalid');
+
   ensureWorkerScope(req, workerId);
 
   const sensorData = await SensorData.findOne({ workerId })
