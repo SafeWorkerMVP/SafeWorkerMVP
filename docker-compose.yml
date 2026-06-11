@@ -1,0 +1,41 @@
+services:
+  mongo:
+    image: mongo:7
+    container_name: safeworker-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - safeworker-mongo-data:/data/db
+
+  backend:
+    build:
+      context: ./backend
+    container_name: safeworker-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      MONGO_URI: mongodb://mongo:27017/safeworker
+      JWT_SECRET: safeworker_secret_key
+      JWT_EXPIRES_IN: 7d
+      CLIENT_ORIGIN: http://localhost:5173
+    depends_on:
+      - mongo
+
+  dashboard:
+    build:
+      context: ./dashboard
+    container_name: safeworker-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:3000/api
+      VITE_SOCKET_URL: http://localhost:3000
+    depends_on:
+      - backend
+
+volumes:
+  safeworker-mongo-data:
