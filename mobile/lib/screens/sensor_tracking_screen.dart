@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../models/api_response.dart';
@@ -42,15 +43,22 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
 
   int _batteryLevel = 80;
   String _networkStatus = 'online';
+
+  double? _latitude;
+  double? _longitude;
+  double? _locationAccuracy;
+  String _locationStatus = 'Konum alınmadı';
+
   String _lastMessage = 'Henüz veri gönderilmedi.';
   bool _isSending = false;
   bool _sensorWarningShown = false;
+  bool _isLocationLoading = false;
 
   bool get _isInactive {
     final secondsWithoutMovement =
         DateTime.now().difference(_lastMovementAt).inSeconds;
 
-    return secondsWithoutMovement >= 30;
+    return secondsWithoutMovement >= 90;
   }
 
   @override
@@ -58,6 +66,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
     super.initState();
     _startSensorStreams();
     _refreshDeviceStatus();
+    _refreshLocation();
   }
 
   @override
@@ -143,6 +152,83 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
     }
   }
 
+  Future<void> _refreshLocation() async {
+    if (_isLocationLoading) return;
+
+    setState(() {
+      _isLocationLoading = true;
+      _locationStatus = 'Konum alınıyor...';
+    });
+
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        setState(() {
+          _locationStatus = 'Konum servisi kapalı';
+          _isLocationLoading = false;
+        });
+        return;
+      }
+
+      var permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied) {
+        if (!mounted) return;
+        setState(() {
+          _locationStatus = 'Konum izni verilmedi';
+          _isLocationLoading = false;
+        });
+        return;
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        setState(() {
+          _locationStatus = 'Konum izni kalıcı olarak reddedildi';
+          _isLocationLoading = false;
+        });
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _latitude = position.latitude;
+        _longitude = position.longitude;
+        _locationAccuracy = position.accuracy;
+        _locationStatus = 'Konum alındı';
+        _isLocationLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _locationStatus = 'Konum alınamadı';
+        _isLocationLoading = false;
+      });
+    }
+  }
+
+  SensorLocation? _buildLocation() {
+    if (_latitude == null || _longitude == null) return null;
+
+    return SensorLocation(
+      latitude: _latitude!,
+      longitude: _longitude!,
+      accuracy: _locationAccuracy,
+    );
+  }
+
   Future<SensorPayload?> _buildPayload() async {
     final workerId = await LocalStorage.getUserId();
     final deviceId = await LocalStorage.getDeviceId();
@@ -159,6 +245,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
     }
 
     await _refreshDeviceStatus();
+    await _refreshLocation();
 
     return SensorPayload(
       workerId: workerId,
@@ -169,6 +256,7 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
       gyroscope: SensorVector(x: _gyroX, y: _gyroY, z: _gyroZ),
       batteryLevel: _batteryLevel,
       networkStatus: _networkStatus,
+      location: _buildLocation(),
       inactivity: _isInactive,
     );
   }
@@ -230,6 +318,12 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
+  String _locationText() {
+    if (_latitude == null || _longitude == null) return _locationStatus;
+
+    return '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final isAutoSending = _autoSendTimer?.isActive == true;
@@ -286,13 +380,36 @@ class _SensorTrackingScreenState extends State<SensorTrackingScreen> {
                     title: 'Son hareket',
                     value: '$secondsWithoutMovement sn',
                     icon: Icons.timer,
-                    color: secondsWithoutMovement >= 30
+                    color: secondsWithoutMovement >= 90
                         ? const Color(0xFFDC2626)
                         : const Color(0xFF0F766E),
                   ),
                 ),
               ],
             ),
+            StatusCard(
+              title: 'GPS Konumu',
+              value: _locationText(),
+              icon: Icons.location_on,
+              color: _latitude == null || _longitude == null
+                  ? const Color(0xFFB45309)
+                  : const Color(0xFF15803D),
+            ),
+            if (_locationAccuracy != null)
+              StatusCard(
+                title: 'GPS Doğruluğu',
+                value: '${_locationAccuracy!.toStringAsFixed(1)} m',
+                icon: Icons.gps_fixed,
+                color: const Color(0xFF0F766E),
+              ),
+            PrimaryButton(
+              label: _isLocationLoading ? 'Konum Alınıyor' : 'Konumu Yenile',
+              icon: Icons.my_location,
+              backgroundColor: const Color(0xFF0F766E),
+              isLoading: _isLocationLoading,
+              onPressed: _isLocationLoading ? null : _refreshLocation,
+            ),
+            const SizedBox(height: 12),
             if (isAutoSending)
               const Card(
                 child: Padding(

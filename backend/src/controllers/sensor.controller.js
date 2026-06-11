@@ -35,6 +35,64 @@ const requireNumber = (body, path) => {
   }
 };
 
+const validateOptionalLocation = (location) => {
+  if (location === undefined || location === null) return;
+
+  if (typeof location !== 'object') {
+    throw createError(400, 'location must be an object');
+  }
+
+  if (
+    location.latitude !== undefined &&
+    (typeof location.latitude !== 'number' || Number.isNaN(location.latitude))
+  ) {
+    throw createError(400, 'location.latitude must be a number');
+  }
+
+  if (
+    location.longitude !== undefined &&
+    (typeof location.longitude !== 'number' || Number.isNaN(location.longitude))
+  ) {
+    throw createError(400, 'location.longitude must be a number');
+  }
+
+  if (
+    location.accuracy !== undefined &&
+    (typeof location.accuracy !== 'number' || Number.isNaN(location.accuracy))
+  ) {
+    throw createError(400, 'location.accuracy must be a number');
+  }
+
+  if (
+    location.latitude !== undefined &&
+    (location.latitude < -90 || location.latitude > 90)
+  ) {
+    throw createError(400, 'location.latitude must be between -90 and 90');
+  }
+
+  if (
+    location.longitude !== undefined &&
+    (location.longitude < -180 || location.longitude > 180)
+  ) {
+    throw createError(400, 'location.longitude must be between -180 and 180');
+  }
+};
+
+const normalizeLocation = (location) => {
+  if (!location) return undefined;
+
+  const hasLatitude = location.latitude !== undefined && location.latitude !== null;
+  const hasLongitude = location.longitude !== undefined && location.longitude !== null;
+
+  if (!hasLatitude || !hasLongitude) return undefined;
+
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracy: location.accuracy
+  };
+};
+
 const ensureWorkerScope = (req, workerId) => {
   if (req.user.role === 'worker' && req.user._id.toString() !== workerId.toString()) {
     throw createError(403, 'Workers can only access their own sensor data');
@@ -79,6 +137,8 @@ const validateSensorBody = (body) => {
   if (body.inactivity !== undefined && typeof body.inactivity !== 'boolean') {
     throw createError(400, 'inactivity must be a boolean');
   }
+
+  validateOptionalLocation(body.location);
 };
 
 const createSensorData = asyncHandler(async (req, res) => {
@@ -93,7 +153,8 @@ const createSensorData = asyncHandler(async (req, res) => {
     gyroscope,
     batteryLevel,
     networkStatus,
-    inactivity
+    inactivity,
+    location
   } = req.body;
 
   ensureWorkerScope(req, workerId);
@@ -115,6 +176,8 @@ const createSensorData = asyncHandler(async (req, res) => {
       throw createError(400, 'shift does not belong to worker');
     }
   }
+
+  const normalizedLocation = normalizeLocation(location);
 
   const riskResult = calculateRisk({
     accelerometer,
@@ -139,6 +202,7 @@ const createSensorData = asyncHandler(async (req, res) => {
     },
     batteryLevel,
     networkStatus,
+    location: normalizedLocation,
     inactivity: inactivity === true,
     riskScore: riskResult.riskScore,
     riskLevel: riskResult.riskLevel,

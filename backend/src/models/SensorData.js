@@ -41,6 +41,11 @@ const sensorDataSchema = new mongoose.Schema(
       enum: ['online', 'offline'],
       required: true
     },
+    location: {
+      latitude: { type: Number },
+      longitude: { type: Number },
+      accuracy: { type: Number }
+    },
     riskScore: {
       type: Number
     },
